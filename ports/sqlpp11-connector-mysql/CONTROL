@@ -3,7 +3,7 @@ Version: 0.29-1
 Homepage: https://github.com/rbock/sqlpp11-connector-mysql
 Description: A C++ wrapper for MySQL meant to be used in combination with sqlpp11.
 Build-Depends: date, sqlpp11
-Default-Features: mariadb
+Default-Features: mysql
 
 Feature: mariadb
 Description: Use MariaDB connector
