@@ -10,7 +10,6 @@
 #include <vcpkg/build.h>
 #include <vcpkg/commands.h>
 #include <vcpkg/configuration.h>
-#include <vcpkg/configurationdeserializer.h>
 #include <vcpkg/globalstate.h>
 #include <vcpkg/metrics.h>
 #include <vcpkg/packagespec.h>
@@ -89,9 +88,9 @@ namespace vcpkg
                                                    const fs::path& filepath)
     {
         Json::Reader reader;
-        ConfigurationDeserializer deserializer(args);
+        auto deserializer = make_configuration_deserializer(filepath.parent_path());
 
-        auto parsed_config_opt = reader.visit(obj, deserializer);
+        auto parsed_config_opt = reader.visit(obj, *deserializer);
         if (!reader.errors().empty())
         {
             System::print2(System::Color::error, "Errors occurred while parsing ", fs::u8string(filepath), "\n");
@@ -102,6 +101,8 @@ namespace vcpkg
                            "more information.\n");
             Checks::exit_fail(VCPKG_LINE_INFO);
         }
+
+        parsed_config_opt.get()->validate_feature_flags(args.feature_flag_settings());
 
         return std::move(parsed_config_opt).value_or_exit(VCPKG_LINE_INFO);
     }
@@ -340,6 +341,10 @@ If you wish to silence this error and use classic mode, you can:
         packages =
             process_output_directory(filesystem, root, args.packages_root_dir.get(), "packages", VCPKG_LINE_INFO);
         scripts = process_input_directory(filesystem, root, args.scripts_root_dir.get(), "scripts", VCPKG_LINE_INFO);
+        builtin_ports =
+            process_output_directory(filesystem, root, args.builtin_ports_root_dir.get(), "ports", VCPKG_LINE_INFO);
+        builtin_port_versions = process_output_directory(
+            filesystem, root, args.builtin_port_versions_dir.get(), "port_versions", VCPKG_LINE_INFO);
         prefab = root / fs::u8path("prefab");
 
         if (args.default_visual_studio_path)
@@ -491,11 +496,13 @@ If you wish to silence this error and use classic mode, you can:
         fs.remove_all(dot_git_dir, VCPKG_LINE_INFO);
 
         // All git commands are run with: --git-dir={dot_git_dir} --work-tree={work_tree_temp}
-        // git clone --no-checkout --local {vcpkg_root} {dot_git_dir}
+        // git clone --no-checkout --local --no-hardlinks {vcpkg_root} {dot_git_dir}
+        // note that `--no-hardlinks` is added because otherwise, git fails to clone in some cases
         System::CmdLineBuilder clone_cmd_builder = git_cmd_builder(paths, dot_git_dir, work_tree)
                                                        .string_arg("clone")
                                                        .string_arg("--no-checkout")
                                                        .string_arg("--local")
+                                                       .string_arg("--no-hardlinks")
                                                        .path_arg(local_repo)
                                                        .path_arg(dot_git_dir);
         const auto clone_output = System::cmd_execute_and_capture_output(clone_cmd_builder.extract());
@@ -539,6 +546,24 @@ If you wish to silence this error and use classic mode, you can:
         }
     }
 
+    ExpectedS<std::string> VcpkgPaths::git_show(const std::string& treeish, const fs::path& dot_git_dir) const
+    {
+        // All git commands are run with: --git-dir={dot_git_dir} --work-tree={work_tree_temp}
+        // git clone --no-checkout --local {vcpkg_root} {dot_git_dir}
+        System::CmdLineBuilder showcmd =
+            git_cmd_builder(*this, dot_git_dir, dot_git_dir).string_arg("show").string_arg(treeish);
+
+        auto output = System::cmd_execute_and_capture_output(showcmd.extract());
+        if (output.exit_code == 0)
+        {
+            return {std::move(output.output), expected_left_tag};
+        }
+        else
+        {
+            return {std::move(output.output), expected_right_tag};
+        }
+    }
+
     void VcpkgPaths::git_checkout_object(const VcpkgPaths& paths,
                                          StringView git_object,
                                          const fs::path& local_repo,
@@ -558,6 +583,7 @@ If you wish to silence this error and use classic mode, you can:
                                                            .string_arg("clone")
                                                            .string_arg("--no-checkout")
                                                            .string_arg("--local")
+                                                           .string_arg("--no-hardlinks")
                                                            .path_arg(local_repo)
                                                            .path_arg(dot_git_dir);
             const auto clone_output = System::cmd_execute_and_capture_output(clone_cmd_builder.extract());
@@ -611,19 +637,23 @@ If you wish to silence this error and use classic mode, you can:
 
     fs::path VcpkgPaths::git_checkout_baseline(Files::Filesystem& fs, StringView commit_sha) const
     {
-        const fs::path local_repo = this->root;
-        const fs::path destination = this->baselines_output / fs::u8path(commit_sha) / fs::u8path("baseline.json");
-        const fs::path baseline_subpath = fs::u8path("port_versions") / fs::u8path("baseline.json");
+        const fs::path destination_parent = this->baselines_output / fs::u8path(commit_sha);
+        const fs::path destination = destination_parent / fs::u8path("baseline.json");
 
         if (!fs.exists(destination))
         {
-            git_checkout_subpath(*this,
-                                 commit_sha,
-                                 baseline_subpath,
-                                 local_repo,
-                                 destination,
-                                 this->baselines_dot_git_dir,
-                                 this->baselines_work_tree);
+            auto treeish = Strings::concat(commit_sha, ":port_versions/baseline.json");
+            auto maybe_contents = git_show(treeish, this->root / fs::u8path(".git"));
+            if (auto contents = maybe_contents.get())
+            {
+                fs.create_directories(destination_parent, VCPKG_LINE_INFO);
+                fs.write_contents(destination, *contents, VCPKG_LINE_INFO);
+            }
+            else
+            {
+                Checks::exit_with_message(
+                    VCPKG_LINE_INFO, "Error: while checking out baseline '%s':\n%s", treeish, maybe_contents.error());
+            }
         }
         return destination;
     }
@@ -638,8 +668,8 @@ If you wish to silence this error and use classic mode, you can:
          * Since we are checking a git tree object, all files will be checked out to the root of `work-tree`.
          * Because of that, it makes sense to use the git hash as the name for the directory.
          */
-        const fs::path local_repo = this->root;
-        const fs::path destination = this->versions_output / fs::u8path(git_tree) / fs::u8path(port_name);
+        const fs::path& local_repo = this->root;
+        fs::path destination = this->versions_output / fs::u8path(git_tree) / fs::u8path(port_name);
 
         if (!fs.exists(destination / "CONTROL") && !fs.exists(destination / "vcpkg.json"))
         {

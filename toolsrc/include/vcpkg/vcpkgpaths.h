@@ -91,6 +91,8 @@ namespace vcpkg
         fs::path community_triplets;
         fs::path scripts;
         fs::path prefab;
+        fs::path builtin_ports;
+        fs::path builtin_port_versions;
 
         fs::path tools;
         fs::path buildsystems;
@@ -115,9 +117,10 @@ namespace vcpkg
         const fs::path& get_tool_exe(const std::string& tool) const;
         const std::string& get_tool_version(const std::string& tool) const;
 
-        // Git manipulation
+        // Git manipulation in the vcpkg directory
         fs::path git_checkout_baseline(Files::Filesystem& filesystem, StringView commit_sha) const;
         fs::path git_checkout_port(Files::Filesystem& filesystem, StringView port_name, StringView git_tree) const;
+        ExpectedS<std::string> git_show(const std::string& treeish, const fs::path& dot_git_dir) const;
 
         Optional<const Json::Object&> get_manifest() const;
         Optional<const fs::path&> get_manifest_path() const;
@@ -141,7 +144,7 @@ namespace vcpkg
 
         // the directory of the builtin ports
         // this should be used only for helper commands, not core commands like `install`.
-        fs::path builtin_ports_directory() const { return root / fs::u8path("ports"); }
+        fs::path builtin_ports_directory() const { return this->builtin_ports; }
 
     private:
         std::unique_ptr<details::VcpkgPathsImpl> m_pimpl;
