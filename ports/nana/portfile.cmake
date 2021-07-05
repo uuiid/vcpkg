@@ -6,12 +6,10 @@ endif()
 
 vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
-    REPO cnjinhao/nana
-    REF 554c4fe87fc31b8ee104228e9117d545d34855b5 # v1.7.4
-    SHA512 d9db8ea1bd47fe663b8e2443a1a3e279760dbd11ef6bc78d9dc8f6fd12f9736b8c8315dfc84d21325e02ad6b2dc3a429593ac80e7610097ddc7253668c383178
-    HEAD_REF develop
-    PATCHES
-        fix-build-error.patch
+    REPO uuiid/nana
+    REF 41abe2d3c84d51e879ef51fe764e93427eb3fe0a    # dev-v1.7.4
+    SHA512 d4d182c42786ba9bb64a5c4dcdfdb3163d6f4bdbb119f2d2b24c200e0c33c3d651d0abf9033cbae96ce503cb9ec05488a102e2d307cffd891cdc3c1d832f28ba
+    HEAD_REF develop-1.8
 )
 
 file(COPY ${CMAKE_CURRENT_LIST_DIR}/CMakeLists.txt DESTINATION ${SOURCE_PATH})
